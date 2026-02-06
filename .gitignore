@@ -1,21 +1,16 @@
 # Virtual Environment
 venv/
 .env
-
 # Python cache
 __pycache__/
 *.pyc
-
 # Upload files
 uploads/
-
 # OS files
 .DS_Store
 Thumbs.db
-
 # IDE
 .vscode/
 .idea/
-
 # Logs
 *.log
