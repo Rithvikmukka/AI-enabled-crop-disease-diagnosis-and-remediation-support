@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react';
 import './App.css';
 import { saveSubmission, syncQueue } from './sync-engine/SyncManager';
-import { getQueue } from './sync-engine/db';
+import { getPendingSubmissions, getHistory } from './sync-engine/db';
 
 function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [queue, setQueue] = useState([]);
+  const [history, setHistory] = useState([]);
   const [formData, setFormData] = useState('');
+  const [imageFile, setImageFile] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
   const [syncStatus, setSyncStatus] = useState('Idle');
 
   useEffect(() => {
@@ -16,8 +19,8 @@ function App() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Initial load of queue
-    refreshQueue();
+    // Initial load
+    refreshData();
 
     return () => {
       window.removeEventListener('online', handleOnline);
@@ -32,18 +35,34 @@ function App() {
     }
   }, [isOnline]);
 
-  const refreshQueue = async () => {
-    const q = await getQueue();
+  const refreshData = async () => {
+    const q = await getPendingSubmissions();
+    const h = await getHistory();
     setQueue(q);
+    setHistory(h);
+  };
+
+  const handleImageChange = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setImageFile(file);
+      setPreviewUrl(URL.createObjectURL(file));
+      // In a real app, revoke old URL to avoid leaks
+    }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!formData) return;
+    if (!formData && !imageFile) return;
 
-    await saveSubmission({ text: formData, timestamp: Date.now() });
+    await saveSubmission({ text: formData, timestamp: Date.now() }, imageFile);
+
+    // Reset form
     setFormData('');
-    await refreshQueue();
+    setImageFile(null);
+    setPreviewUrl(null);
+
+    await refreshData();
 
     // If online, try to sync immediately
     if (navigator.onLine) {
@@ -53,13 +72,23 @@ function App() {
 
   const handleSync = async () => {
     setSyncStatus('Syncing...');
+
+    // Poll for updates while syncing so UI shows progress
+    const intervalId = setInterval(refreshData, 500);
+
     try {
       const result = await syncQueue();
-      setSyncStatus(`Synced ${result.synced} items`);
-      await refreshQueue();
-      setTimeout(() => setSyncStatus('Idle'), 3000);
+      if (result.synced > 0) {
+        setSyncStatus(`Synced ${result.synced} items`);
+      } else {
+        setSyncStatus('Idle');
+      }
     } catch (e) {
       setSyncStatus('Sync Failed');
+    } finally {
+      clearInterval(intervalId);
+      await refreshData();
+      setTimeout(() => setSyncStatus('Idle'), 3000);
     }
   };
 
@@ -74,14 +103,34 @@ function App() {
 
       <main>
         <section className="input-section">
-          <h2>New Submission</h2>
+          <h2>New Crop Submission</h2>
           <form onSubmit={handleSubmit}>
             <textarea
               value={formData}
               onChange={(e) => setFormData(e.target.value)}
-              placeholder="Enter crop data or notes..."
+              placeholder="Enter crop notes..."
             />
-            <button type="submit">
+
+            <div className="file-input-wrapper">
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleImageChange}
+                id="camera-input"
+              />
+              <label htmlFor="camera-input" className="camera-btn">
+                📷 {imageFile ? 'Change Photo' : 'Take Photo'}
+              </label>
+            </div>
+
+            {previewUrl && (
+              <div className="image-preview">
+                <img src={previewUrl} alt="Preview" />
+              </div>
+            )}
+
+            <button type="submit" className="submit-btn">
               {isOnline ? 'Submit Cloud' : 'Save Offline'}
             </button>
           </form>
@@ -99,13 +148,38 @@ function App() {
 
           <div className="queue-list">
             {queue.map((item) => (
-              <div key={item.id} className="queue-item">
+              <div key={item.id} className={`queue-item ${item.status}`}>
                 <span className="id">ID: {item.id.slice(0, 8)}...</span>
-                <span className="data">{item.data.text}</span>
-                <span className="badge">Pending</span>
+                <span className="data">
+                  {item.image ? '📷 [Image] ' : ''}
+                  {item.data.text}
+                </span>
+                <span className="badge">
+                  {item.status === 'uploading' ? '📤 Uploading...' : '⏳ Pending'}
+                </span>
               </div>
             ))}
             {queue.length === 0 && <p className="empty-msg">No pending items.</p>}
+          </div>
+        </section>
+
+        <section className="history-section">
+          <h2>Diagnosis Status / History</h2>
+          <div className="queue-list">
+            {history.map((item) => (
+              <div key={item.id} className="queue-item synced">
+                <span className="id">ID: {item.id.slice(0, 8)}...</span>
+                <span className="data">
+                  {item.image ? '📷 [Image] ' : ''}
+                  {item.data.text}
+                </span>
+                <div className="status-group">
+                  <span className="badge success">✅ Synced</span>
+                  {item.serverMessage && <span className="server-msg">({item.serverMessage})</span>}
+                </div>
+              </div>
+            ))}
+            {history.length === 0 && <p className="empty-msg">No history.</p>}
           </div>
         </section>
       </main>
